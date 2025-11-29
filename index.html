@@ -117,6 +117,13 @@
     .highlight {
       font-weight: 600;
     }
+
+    /* -------------------------------------------- */
+    /* FIX: Force popups to use stable ASCII fonts  */
+    /* -------------------------------------------- */
+    .mapboxgl-popup-content {
+      font-family: Arial, sans-serif !important;
+    }
   </style>
 </head>
 <body>
@@ -174,7 +181,7 @@
   </div>
 
   <script>
-    // 1. Mapbox access token (REPLACED WITH YOUR TOKEN)
+    // 1. Mapbox access token (YOUR TOKEN)
     mapboxgl.accessToken =
       "pk.eyJ1IjoibGJpYXNzaW8iLCJhIjoiY21panJlMml1MTVqdTNrcTh5c2xiNjJ5MCJ9.7Y1iTXPrISgX75u4Q6dbDA";
 
@@ -224,7 +231,7 @@
 
     // 5. Map load event: add sources & layers
     map.on("load", () => {
-      // Points source
+      // Points
       map.addSource("points-source", {
         type: "geojson",
         data: points
@@ -242,13 +249,10 @@
         }
       });
 
-      // Distance line
+      // Distance
       map.addSource("distance-source", {
         type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: []
-        }
+        data: { type: "FeatureCollection", features: [] }
       });
 
       map.addLayer({
@@ -262,13 +266,10 @@
         }
       });
 
-      // Nearest neighbor line (query to nearest)
+      // Nearest neighbor line
       map.addSource("nearest-line-source", {
         type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: []
-        }
+        data: { type: "FeatureCollection", features: [] }
       });
 
       map.addLayer({
@@ -284,10 +285,7 @@
       // Nearest query point
       map.addSource("nearest-query-source", {
         type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: []
-        }
+        data: { type: "FeatureCollection", features: [] }
       });
 
       map.addLayer({
@@ -302,13 +300,10 @@
         }
       });
 
-      // Buffer source
+      // Buffer
       map.addSource("buffer-source", {
         type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: []
-        }
+        data: { type: "FeatureCollection", features: [] }
       });
 
       map.addLayer({
@@ -322,73 +317,39 @@
         }
       });
 
-      // Map click behavior
       map.on("click", handleMapClick);
     });
 
-    // 6. Helpers
-
     function updatePointsSource() {
-      if (map.getSource("points-source")) {
-        map.getSource("points-source").setData(points);
-      }
+      map.getSource("points-source").setData(points);
     }
 
     function clearAnalysisLayers() {
-      const emptyFC = {
-        type: "FeatureCollection",
-        features: []
-      };
-
-      const sources = [
-        "distance-source",
-        "nearest-line-source",
-        "nearest-query-source",
-        "buffer-source"
-      ];
-
-      sources.forEach((s) => {
-        if (map.getSource(s)) {
-          map.getSource(s).setData(emptyFC);
-        }
-      });
-
+      const empty = { type: "FeatureCollection", features: [] };
+      ["distance-source", "nearest-line-source", "nearest-query-source", "buffer-source"].forEach(
+        (src) => map.getSource(src).setData(empty)
+      );
       distancePoints = [];
     }
 
     function handleMapClick(e) {
-      const clickLngLat = [e.lngLat.lng, e.lngLat.lat];
+      const lngLat = [e.lngLat.lng, e.lngLat.lat];
 
-      if (currentMode === "add") {
-        addPoint(clickLngLat);
-      } else if (currentMode === "distance") {
-        handleDistanceClick(clickLngLat);
-      } else if (currentMode === "nearest") {
-        handleNearestClick(clickLngLat);
-      } else if (currentMode === "buffer") {
-        handleBufferClick(clickLngLat);
-      }
+      if (currentMode === "add") addPoint(lngLat);
+      else if (currentMode === "distance") handleDistanceClick(lngLat);
+      else if (currentMode === "nearest") handleNearestClick(lngLat);
+      else if (currentMode === "buffer") handleBufferClick(lngLat);
     }
 
-    // 6.1. Add point mode
     function addPoint(lngLat) {
-      const feature = {
+      points.features.push({
         type: "Feature",
-        geometry: {
-          type: "Point",
-          coordinates: lngLat
-        },
-        properties: {
-          id: points.features.length + 1,
-          created_at: new Date().toISOString()
-        }
-      };
-
-      points.features.push(feature);
+        geometry: { type: "Point", coordinates: lngLat },
+        properties: { id: points.features.length + 1 }
+      });
       updatePointsSource();
     }
 
-    // 6.2. Distance measurement mode
     function handleDistanceClick(lngLat) {
       distancePoints.push(lngLat);
 
@@ -396,97 +357,76 @@
         const from = turf.point(distancePoints[0]);
         const to = turf.point(distancePoints[1]);
 
-        const distanceKm = turf.distance(from, to, { units: "kilometers" });
-        const distanceMi = turf.distance(from, to, { units: "miles" });
+        const km = turf.distance(from, to, { units: "kilometers" });
+        const mi = turf.distance(from, to, { units: "miles" });
 
-        const line = {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              geometry: {
-                type: "LineString",
-                coordinates: distancePoints
-              },
-              properties: {
-                distance_km: distanceKm,
-                distance_miles: distanceMi
-              }
-            }
-          ]
-        };
+        const line = turf.lineString(distancePoints);
 
-        map.getSource("distance-source").setData(line);
+        map.getSource("distance-source").setData(
+          turf.featureCollection([line])
+        );
 
-        // Midpoint for popup
         const midpoint = turf.midpoint(from, to).geometry.coordinates;
 
         new mapboxgl.Popup()
           .setLngLat(midpoint)
           .setHTML(
-            `<strong>Distance</strong><br>
-             ${distanceKm.toFixed(2)} km<br>
-             ${distanceMi.toFixed(2)} mi`
+            `<strong>Distance</strong><br>${km.toFixed(2)} km<br>${mi.toFixed(
+              2
+            )} mi`
           )
           .addTo(map);
 
-        // Reset for next measurement
         distancePoints = [];
       }
     }
 
-    // 6.3. Nearest neighbor mode
     function handleNearestClick(lngLat) {
       if (!points.features.length) {
-        alert("Add some points first in 'Add Points' mode.");
+        alert("Add some points first!");
         return;
       }
 
-      const queryPoint = turf.point(lngLat);
-      const fc = turf.featureCollection(points.features);
+      const query = turf.point(lngLat);
+      const nearest = turf.nearestPoint(query, points);
 
-      const nearest = turf.nearestPoint(queryPoint, fc);
+      map.getSource("nearest-query-source").setData(
+        turf.featureCollection([query])
+      );
+
       const line = turf.lineString([
-        queryPoint.geometry.coordinates,
+        lngLat,
         nearest.geometry.coordinates
       ]);
 
-      const lineFC = turf.featureCollection([line]);
-      const queryFC = turf.featureCollection([queryPoint]);
+      map.getSource("nearest-line-source").setData(
+        turf.featureCollection([line])
+      );
 
-      map.getSource("nearest-line-source").setData(lineFC);
-      map.getSource("nearest-query-source").setData(queryFC);
-
-      const distanceKm = turf.distance(queryPoint, nearest, {
-        units: "kilometers"
-      });
+      const km = turf.distance(query, nearest, { units: "kilometers" });
 
       new mapboxgl.Popup()
         .setLngLat(nearest.geometry.coordinates)
         .setHTML(
-          `<strong>Nearest neighbor</strong><br>
-           Distance: ${distanceKm.toFixed(2)} km`
+          `<strong>Nearest Neighbor</strong><br>${km.toFixed(2)} km`
         )
         .addTo(map);
     }
 
-    // 6.4. Buffer mode
     function handleBufferClick(lngLat) {
-      const radiusInput = document.getElementById("buffer-radius");
-      let radius = parseFloat(radiusInput.value);
-
-      if (isNaN(radius) || radius <= 0) {
-        alert("Please enter a valid buffer radius in kilometers.");
+      const radius = parseFloat(document.getElementById("buffer-radius").value);
+      if (!radius) {
+        alert("Enter a valid buffer radius.");
         return;
       }
 
-      const centerPoint = turf.point(lngLat);
-      const bufferPolygon = turf.buffer(centerPoint, radius, {
+      const poly = turf.buffer(turf.point(lngLat), radius, {
         units: "kilometers"
       });
 
-      const bufferFC = turf.featureCollection([bufferPolygon]);
-      map.getSource("buffer-source").setData(bufferFC);
+      map.getSource("buffer-source").setData(
+        turf.featureCollection([poly])
+      );
     }
   </script>
 </body>
