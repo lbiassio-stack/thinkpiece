@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mapbox + Turf.js Spatial Analysis</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Mapbox GL JS -->
+  <link
+    href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css"
+    rel="stylesheet"
+  />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+
+  <!-- Turf.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #app {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    #sidebar {
+      width: 280px;
+      max-width: 50%;
+      padding: 16px;
+      box-sizing: border-box;
+      border-right: 1px solid #ddd;
+      overflow-y: auto;
+    }
+
+    #map {
+      flex: 1;
+    }
+
+    h1 {
+      font-size: 18px;
+      margin: 0 0 8px;
+    }
+
+    h2 {
+      font-size: 14px;
+      margin: 16px 0 8px;
+    }
+
+    .mode-group {
+      margin-bottom: 16px;
+    }
+
+    .mode-option {
+      display: flex;
+      align-items: center;
+      margin-bottom: 6px;
+      gap: 6px;
+      font-size: 14px;
+    }
+
+    label {
+      cursor: pointer;
+    }
+
+    input[type="number"] {
+      width: 100%;
+      padding: 4px 6px;
+      box-sizing: border-box;
+      margin-top: 4px;
+    }
+
+    .info-box {
+      font-size: 13px;
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #eee;
+      background-color: #fafafa;
+      margin-bottom: 8px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid #ccc;
+      margin-right: 4px;
+      margin-bottom: 4px;
+      background-color: #f5f5f5;
+    }
+
+    button {
+      padding: 6px 10px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background-color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      margin-right: 6px;
+      margin-top: 4px;
+    }
+
+    button:hover {
+      background-color: #f0f0f0;
+    }
+
+    .footer {
+      margin-top: 16px;
+      font-size: 11px;
+      color: #777;
+    }
+
+    .highlight {
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <h1>Spatial Analysis Demo</h1>
+      <div class="info-box">
+        <div><span class="badge">Click Actions</span></div>
+        <div><span class="highlight">Step 1:</span> Choose a mode.</div>
+        <div><span class="highlight">Step 2:</span> Click on the map.</div>
+      </div>
+
+      <h2>1. Mode</h2>
+      <div class="mode-group">
+        <div class="mode-option">
+          <input type="radio" name="mode" id="mode-add" value="add" checked />
+          <label for="mode-add"><strong>Add Points</strong> (click to add data points)</label>
+        </div>
+        <div class="mode-option">
+          <input type="radio" name="mode" id="mode-distance" value="distance" />
+          <label for="mode-distance"><strong>Measure Distance</strong> (click two locations)</label>
+        </div>
+        <div class="mode-option">
+          <input type="radio" name="mode" id="mode-nearest" value="nearest" />
+          <label for="mode-nearest"><strong>Nearest Neighbor</strong> (click query point)</label>
+        </div>
+        <div class="mode-option">
+          <input type="radio" name="mode" id="mode-buffer" value="buffer" />
+          <label for="mode-buffer"><strong>Buffer</strong> (click center of buffer)</label>
+        </div>
+      </div>
+
+      <h2>2. Buffer Settings</h2>
+      <label for="buffer-radius">Buffer radius (kilometers):</label>
+      <input
+        type="number"
+        id="buffer-radius"
+        value="5"
+        step="0.5"
+        min="0.5"
+        max="1000"
+      />
+
+      <h2>3. Layer Management</h2>
+      <button id="btn-clear-analysis">Clear analysis</button>
+      <button id="btn-clear-points">Clear all points</button>
+
+      <div class="footer">
+        <div>Built with <strong>Mapbox GL JS</strong> &amp; <strong>Turf.js</strong>.</div>
+        <div>Your Mapbox token is already embedded.</div>
+      </div>
+    </div>
+
+    <div id="map"></div>
+  </div>
+
+  <script>
+    // 1. Mapbox access token (REPLACED WITH YOUR TOKEN)
+    mapboxgl.accessToken =
+      "pk.eyJ1IjoibGJpYXNzaW8iLCJhIjoiY21panJlMml1MTVqdTNrcTh5c2xiNjJ5MCJ9.7Y1iTXPrISgX75u4Q6dbDA";
+
+    // 2. Initialize the map
+    const map = new mapboxgl.Map({
+      container: "map",
+      style: "mapbox://styles/mapbox/streets-v12",
+      center: [-122.335167, 47.608013], // Seattle-ish default
+      zoom: 11
+    });
+
+    map.addControl(new mapboxgl.NavigationControl(), "top-right");
+    map.addControl(new mapboxgl.ScaleControl({ unit: "metric" }), "bottom-left");
+
+    // 3. Data containers
+    let points = {
+      type: "FeatureCollection",
+      features: []
+    };
+
+    let distancePoints = []; // temp storage for distance measurement clicks
+
+    // 4. Current mode
+    let currentMode = "add";
+
+    function setMode(mode) {
+      currentMode = mode;
+      distancePoints = []; // reset any ongoing measurement
+    }
+
+    // Hook up radio buttons
+    document.querySelectorAll("input[name='mode']").forEach((input) => {
+      input.addEventListener("change", (e) => setMode(e.target.value));
+    });
+
+    // Buttons
+    document
+      .getElementById("btn-clear-analysis")
+      .addEventListener("click", clearAnalysisLayers);
+    document
+      .getElementById("btn-clear-points")
+      .addEventListener("click", () => {
+        points.features = [];
+        updatePointsSource();
+        clearAnalysisLayers();
+      });
+
+    // 5. Map load event: add sources & layers
+    map.on("load", () => {
+      // Points source
+      map.addSource("points-source", {
+        type: "geojson",
+        data: points
+      });
+
+      map.addLayer({
+        id: "points-layer",
+        type: "circle",
+        source: "points-source",
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#007cbf",
+          "circle-stroke-width": 1,
+          "circle-stroke-color": "#ffffff"
+        }
+      });
+
+      // Distance line
+      map.addSource("distance-source", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: []
+        }
+      });
+
+      map.addLayer({
+        id: "distance-layer",
+        type: "line",
+        source: "distance-source",
+        paint: {
+          "line-width": 3,
+          "line-color": "#ff7f00",
+          "line-dasharray": [2, 2]
+        }
+      });
+
+      // Nearest neighbor line (query to nearest)
+      map.addSource("nearest-line-source", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: []
+        }
+      });
+
+      map.addLayer({
+        id: "nearest-line-layer",
+        type: "line",
+        source: "nearest-line-source",
+        paint: {
+          "line-width": 3,
+          "line-color": "#d73027"
+        }
+      });
+
+      // Nearest query point
+      map.addSource("nearest-query-source", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: []
+        }
+      });
+
+      map.addLayer({
+        id: "nearest-query-layer",
+        type: "circle",
+        source: "nearest-query-source",
+        paint: {
+          "circle-radius": 5,
+          "circle-color": "#d73027",
+          "circle-stroke-width": 1,
+          "circle-stroke-color": "#ffffff"
+        }
+      });
+
+      // Buffer source
+      map.addSource("buffer-source", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: []
+        }
+      });
+
+      map.addLayer({
+        id: "buffer-layer",
+        type: "fill",
+        source: "buffer-source",
+        paint: {
+          "fill-color": "#41ab5d",
+          "fill-opacity": 0.25,
+          "fill-outline-color": "#006d2c"
+        }
+      });
+
+      // Map click behavior
+      map.on("click", handleMapClick);
+    });
+
+    // 6. Helpers
+
+    function updatePointsSource() {
+      if (map.getSource("points-source")) {
+        map.getSource("points-source").setData(points);
+      }
+    }
+
+    function clearAnalysisLayers() {
+      const emptyFC = {
+        type: "FeatureCollection",
+        features: []
+      };
+
+      const sources = [
+        "distance-source",
+        "nearest-line-source",
+        "nearest-query-source",
+        "buffer-source"
+      ];
+
+      sources.forEach((s) => {
+        if (map.getSource(s)) {
+          map.getSource(s).setData(emptyFC);
+        }
+      });
+
+      distancePoints = [];
+    }
+
+    function handleMapClick(e) {
+      const clickLngLat = [e.lngLat.lng, e.lngLat.lat];
+
+      if (currentMode === "add") {
+        addPoint(clickLngLat);
+      } else if (currentMode === "distance") {
+        handleDistanceClick(clickLngLat);
+      } else if (currentMode === "nearest") {
+        handleNearestClick(clickLngLat);
+      } else if (currentMode === "buffer") {
+        handleBufferClick(clickLngLat);
+      }
+    }
+
+    // 6.1. Add point mode
+    function addPoint(lngLat) {
+      const feature = {
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: lngLat
+        },
+        properties: {
+          id: points.features.length + 1,
+          created_at: new Date().toISOString()
+        }
+      };
+
+      points.features.push(feature);
+      updatePointsSource();
+    }
+
+    // 6.2. Distance measurement mode
+    function handleDistanceClick(lngLat) {
+      distancePoints.push(lngLat);
+
+      if (distancePoints.length === 2) {
+        const from = turf.point(distancePoints[0]);
+        const to = turf.point(distancePoints[1]);
+
+        const distanceKm = turf.distance(from, to, { units: "kilometers" });
+        const distanceMi = turf.distance(from, to, { units: "miles" });
+
+        const line = {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: distancePoints
+              },
+              properties: {
+                distance_km: distanceKm,
+                distance_miles: distanceMi
+              }
+            }
+          ]
+        };
+
+        map.getSource("distance-source").setData(line);
+
+        // Midpoint for popup
+        const midpoint = turf.midpoint(from, to).geometry.coordinates;
+
+        new mapboxgl.Popup()
+          .setLngLat(midpoint)
+          .setHTML(
+            `<strong>Distance</strong><br>
+             ${distanceKm.toFixed(2)} km<br>
+             ${distanceMi.toFixed(2)} mi`
+          )
+          .addTo(map);
+
+        // Reset for next measurement
+        distancePoints = [];
+      }
+    }
+
+    // 6.3. Nearest neighbor mode
+    function handleNearestClick(lngLat) {
+      if (!points.features.length) {
+        alert("Add some points first in 'Add Points' mode.");
+        return;
+      }
+
+      const queryPoint = turf.point(lngLat);
+      const fc = turf.featureCollection(points.features);
+
+      const nearest = turf.nearestPoint(queryPoint, fc);
+      const line = turf.lineString([
+        queryPoint.geometry.coordinates,
+        nearest.geometry.coordinates
+      ]);
+
+      const lineFC = turf.featureCollection([line]);
+      const queryFC = turf.featureCollection([queryPoint]);
+
+      map.getSource("nearest-line-source").setData(lineFC);
+      map.getSource("nearest-query-source").setData(queryFC);
+
+      const distanceKm = turf.distance(queryPoint, nearest, {
+        units: "kilometers"
+      });
+
+      new mapboxgl.Popup()
+        .setLngLat(nearest.geometry.coordinates)
+        .setHTML(
+          `<strong>Nearest neighbor</strong><br>
+           Distance: ${distanceKm.toFixed(2)} km`
+        )
+        .addTo(map);
+    }
+
+    // 6.4. Buffer mode
+    function handleBufferClick(lngLat) {
+      const radiusInput = document.getElementById("buffer-radius");
+      let radius = parseFloat(radiusInput.value);
+
+      if (isNaN(radius) || radius <= 0) {
+        alert("Please enter a valid buffer radius in kilometers.");
+        return;
+      }
+
+      const centerPoint = turf.point(lngLat);
+      const bufferPolygon = turf.buffer(centerPoint, radius, {
+        units: "kilometers"
+      });
+
+      const bufferFC = turf.featureCollection([bufferPolygon]);
+      map.getSource("buffer-source").setData(bufferFC);
+    }
+  </script>
+</body>
+</html>
